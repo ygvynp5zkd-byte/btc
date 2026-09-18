@@ -2,14 +2,21 @@
 BTC -> Altcoin Lag Scanner (Telegram Bot Edition)
 ==================================================
 Ports the exact logic of the "BTC → Altcoin Lag Scanner V3.0" Pine Script
-to Python, using Bybit's free public REST API (no API key needed for
-market data) and sending Telegram messages on new BUY signals.
+to Python, using CryptoCompare's free public data API and sending Telegram
+messages on new BUY signals.
 
-NOTE: Binance's public API (api.binance.com) returns HTTP 451 for requests
-coming from US-based IPs, which includes GitHub Actions runners (hosted on
-US Azure datacenters). Bybit's public market-data endpoint does not apply
-this restriction, and uses the same symbol naming (e.g. BTCUSDT), so it's
-used here instead.
+NOTE ON DATA SOURCE: Both Binance (api.binance.com) and Bybit block requests
+from US-based IPs (returning HTTP 451 / 403 respectively), and GitHub
+Actions runners are hosted on US Azure datacenters, so calls to either
+exchange fail from this environment. CryptoCompare is a market-data
+aggregator (not an exchange), has no such geo-restriction, and provides a
+free "histominute" endpoint that can return pre-aggregated 15-minute
+candles directly (via the `aggregate` parameter), so it's used here.
+
+Optional: register a free API key at https://www.cryptocompare.com/cryptopian/api-keys
+and set it as the CRYPTOCOMPARE_API_KEY secret for a much higher rate limit.
+The script works without one too, just with a lower (but sufficient for
+this use case) rate limit.
 
 Designed to be run every 15 minutes by a free scheduler (GitHub Actions).
 State (scanOn, open trades, win/loss, previous buy flags) is persisted to
@@ -26,8 +33,9 @@ import urllib.parse
 # SETTINGS  (mirrors the Pine Script inputs / defaults)
 # ============================================================
 
-BTC_SYMBOL = "BTCUSDT"
-TIMEFRAME = "15"           # Bybit interval in minutes (string)
+BTC_SYMBOL = "BTC"
+QUOTE = "USD"
+AGGREGATE_MINUTES = 15     # candle size in minutes
 BTC_THRESHOLD = 0.30       # BTC Trigger %
 BTC_LOOKBACK = 1           # BTC Move Lookback (in closed candles)
 
@@ -54,17 +62,19 @@ TP_PERCENT = 1.20
 SL_PERCENT = 1.00
 
 COINS = {
-    "ETH": "ETHUSDT",
-    "BNB": "BNBUSDT",
-    "SOL": "SOLUSDT",
-    "XRP": "XRPUSDT",
-    "ADA": "ADAUSDT",
-    "DOGE": "DOGEUSDT",
-    "AVAX": "AVAXUSDT",
-    "LINK": "LINKUSDT",
-    "DOT": "DOTUSDT",
-    "LTC": "LTCUSDT",
+    "ETH": "ETH",
+    "BNB": "BNB",
+    "SOL": "SOL",
+    "XRP": "XRP",
+    "ADA": "ADA",
+    "DOGE": "DOGE",
+    "AVAX": "AVAX",
+    "LINK": "LINK",
+    "DOT": "DOT",
+    "LTC": "LTC",
 }
+
+CRYPTOCOMPARE_API_KEY = os.environ.get("CRYPTOCOMPARE_API_KEY", "")
 
 STATE_FILE = os.path.join(os.path.dirname(__file__), "state.json")
 
@@ -75,41 +85,42 @@ NEEDED_CANDLES = max(CORR_LEN, VOLUME_LEN) + 10
 
 
 # ============================================================
-# BYBIT DATA (free public endpoint, not geo-blocked, no key required)
+# CRYPTOCOMPARE DATA (free, no geo-blocking, key optional for higher limits)
 # ============================================================
 
-def fetch_klines(symbol, interval=TIMEFRAME, limit=NEEDED_CANDLES):
-    url = ("https://api.bybit.com/v5/market/kline?" +
+def fetch_klines(fsym, tsym=QUOTE, aggregate=AGGREGATE_MINUTES, limit=NEEDED_CANDLES):
+    url = ("https://min-api.cryptocompare.com/data/v2/histominute?" +
            urllib.parse.urlencode({
-               "category": "spot",
-               "symbol": symbol,
-               "interval": interval,
+               "fsym": fsym,
+               "tsym": tsym,
+               "aggregate": aggregate,
                "limit": limit,
            }))
-    with urllib.request.urlopen(url, timeout=15) as resp:
+    headers = {}
+    if CRYPTOCOMPARE_API_KEY:
+        headers["authorization"] = f"Apikey {CRYPTOCOMPARE_API_KEY}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=15) as resp:
         payload = json.loads(resp.read().decode())
 
-    if payload.get("retCode") != 0:
-        raise RuntimeError(f"Bybit API error for {symbol}: {payload.get('retMsg')}")
+    if payload.get("Response") != "Success":
+        raise RuntimeError(f"CryptoCompare API error for {fsym}: {payload.get('Message')}")
 
-    # Bybit returns rows as [startTime, open, high, low, close, volume, turnover],
-    # newest first. Sort ascending by time so downstream logic (which expects
-    # oldest -> newest, matching Pine's close[n] indexing) works the same way.
-    rows = payload["result"]["list"]
-    rows.sort(key=lambda r: int(r[0]))
+    rows = payload["Data"]["Data"]
+    rows.sort(key=lambda r: r["time"])
 
-    interval_ms = int(interval) * 60_000
-    now_ms = int(time.time() * 1000)
+    interval_s = aggregate * 60
+    now_s = int(time.time())
 
     # Drop the currently-forming (unclosed) candle so we only ever act on
     # confirmed data, mirroring `confirmedOnly = true` in the Pine script.
-    if rows and (int(rows[-1][0]) + interval_ms) > now_ms:
+    if rows and (rows[-1]["time"] + interval_s) > now_s:
         rows = rows[:-1]
 
-    closes = [float(r[4]) for r in rows]
-    highs = [float(r[2]) for r in rows]
-    lows = [float(r[3]) for r in rows]
-    volumes = [float(r[5]) for r in rows]
+    closes = [float(r["close"]) for r in rows]
+    highs = [float(r["high"]) for r in rows]
+    lows = [float(r["low"]) for r in rows]
+    volumes = [float(r["volumeto"]) for r in rows]
     return closes, highs, lows, volumes
 
 
@@ -238,7 +249,7 @@ def main():
         ret_prev = returns_full[-2]
         alt_corr_series = returns_full[-CORR_LEN:]
 
-        corr = pearson_correlation(ret_series := alt_corr_series, btc_corr_series)
+        corr = pearson_correlation(alt_corr_series, btc_corr_series)
         corr_ok = corr is not None and corr >= CORR_MIN
 
         ratio = (abs(move) / abs(btc_move)) if (btc_move and abs(btc_move) > 0 and move is not None) else None
