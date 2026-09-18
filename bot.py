@@ -33,7 +33,7 @@ import urllib.parse
 # ============================================================
 
 BTC_SYMBOL = "BTC"
-QUOTE = "USD"
+QUOTE = "USDT"
 AGGREGATE_MINUTES = 15     # candle size in minutes
 BTC_THRESHOLD = 0.30       # BTC Trigger %
 BTC_LOOKBACK = 1           # BTC Move Lookback (in closed candles)
