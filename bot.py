@@ -13,10 +13,8 @@ aggregator (not an exchange), has no such geo-restriction, and provides a
 free "histominute" endpoint that can return pre-aggregated 15-minute
 candles directly (via the `aggregate` parameter), so it's used here.
 
-Optional: register a free API key at https://www.cryptocompare.com/cryptopian/api-keys
-and set it as the CRYPTOCOMPARE_API_KEY secret for a much higher rate limit.
-The script works without one too, just with a lower (but sufficient for
-this use case) rate limit.
+Register a free API key at https://www.cryptocompare.com/cryptopian/api-keys
+and set it as the CRYPTOCOMPARE_API_KEY secret.
 
 Designed to be run every 15 minutes by a free scheduler (GitHub Actions).
 State (scanOn, open trades, win/loss, previous buy flags) is persisted to
@@ -26,6 +24,7 @@ state.json so it behaves like Pine's `var` variables across runs.
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 import urllib.parse
 
@@ -85,23 +84,31 @@ NEEDED_CANDLES = max(CORR_LEN, VOLUME_LEN) + 10
 
 
 # ============================================================
-# CRYPTOCOMPARE DATA (free, no geo-blocking, key optional for higher limits)
+# CRYPTOCOMPARE DATA (free, no geo-blocking; needs a free API key)
 # ============================================================
 
 def fetch_klines(fsym, tsym=QUOTE, aggregate=AGGREGATE_MINUTES, limit=NEEDED_CANDLES):
-    url = ("https://min-api.cryptocompare.com/data/v2/histominute?" +
-           urllib.parse.urlencode({
-               "fsym": fsym,
-               "tsym": tsym,
-               "aggregate": aggregate,
-               "limit": limit,
-           }))
+    params = {
+        "fsym": fsym,
+        "tsym": tsym,
+        "aggregate": aggregate,
+        "limit": limit,
+    }
+    if CRYPTOCOMPARE_API_KEY:
+        params["api_key"] = CRYPTOCOMPARE_API_KEY  # some CC endpoints expect it in the query string
+
+    url = "https://min-api.cryptocompare.com/data/v2/histominute?" + urllib.parse.urlencode(params)
     headers = {}
     if CRYPTOCOMPARE_API_KEY:
-        headers["authorization"] = f"Apikey {CRYPTOCOMPARE_API_KEY}"
+        headers["authorization"] = f"Apikey {CRYPTOCOMPARE_API_KEY}"  # ...and some expect it as a header
+
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        payload = json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        raise RuntimeError(f"HTTP {e.code} from CryptoCompare for {fsym}: {body}") from None
 
     if payload.get("Response") != "Success":
         raise RuntimeError(f"CryptoCompare API error for {fsym}: {payload.get('Message')}")
