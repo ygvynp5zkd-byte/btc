@@ -9,9 +9,10 @@ NOTE ON DATA SOURCE: Both Binance (api.binance.com) and Bybit block requests
 from US-based IPs (returning HTTP 451 / 403 respectively), and GitHub
 Actions runners are hosted on US Azure datacenters, so calls to either
 exchange fail from this environment. CryptoCompare is a market-data
-aggregator (not an exchange), has no such geo-restriction, and provides a
-free "histominute" endpoint that can return pre-aggregated 15-minute
-candles directly (via the `aggregate` parameter), so it's used here.
+aggregator (not an exchange), has no such geo-restriction. We ask it to
+proxy Binance's own candles (e=Binance) so pair coverage matches the
+original Pine script exactly, while the request to Binance happens from
+CryptoCompare's servers, not from GitHub Actions' US IP.
 
 Register a free API key at https://www.cryptocompare.com/cryptopian/api-keys
 and set it as the CRYPTOCOMPARE_API_KEY secret.
@@ -86,23 +87,22 @@ NEEDED_CANDLES = max(CORR_LEN, VOLUME_LEN) + 10
 # ============================================================
 # CRYPTOCOMPARE DATA (free, no geo-blocking, key required)
 # ============================================================
+
 def fetch_klines(fsym, tsym=QUOTE, aggregate=AGGREGATE_MINUTES, limit=NEEDED_CANDLES, max_retries=3):
     params = {
         "fsym": fsym,
         "tsym": tsym,
         "aggregate": aggregate,
-        "limit": limit
+        "limit": limit,
         "e": "Binance",
     }
-
-    }
     if CRYPTOCOMPARE_API_KEY:
-        params["api_key"] = CRYPTOCOMPARE_API_KEY  # some CC endpoints expect it in the query string
+        params["api_key"] = CRYPTOCOMPARE_API_KEY
 
     url = "https://min-api.cryptocompare.com/data/v2/histominute?" + urllib.parse.urlencode(params)
     headers = {}
     if CRYPTOCOMPARE_API_KEY:
-        headers["authorization"] = f"Apikey {CRYPTOCOMPARE_API_KEY}"  # ...and some expect it as a header
+        headers["authorization"] = f"Apikey {CRYPTOCOMPARE_API_KEY}"
 
     last_error = None
     for attempt in range(max_retries):
@@ -130,8 +130,6 @@ def fetch_klines(fsym, tsym=QUOTE, aggregate=AGGREGATE_MINUTES, limit=NEEDED_CAN
         interval_s = aggregate * 60
         now_s = int(time.time())
 
-        # Drop the currently-forming (unclosed) candle so we only ever act on
-        # confirmed data, mirroring `confirmedOnly = true` in the Pine script.
         if rows and (rows[-1]["time"] + interval_s) > now_s:
             rows = rows[:-1]
 
@@ -145,7 +143,6 @@ def fetch_klines(fsym, tsym=QUOTE, aggregate=AGGREGATE_MINUTES, limit=NEEDED_CAN
 
 
 def pct_returns(closes):
-    """Return list of (close[i]-close[i-1])/close[i-1] for i=1..len-1."""
     out = []
     for i in range(1, len(closes)):
         prev = closes[i - 1]
@@ -175,10 +172,6 @@ def sma(values, length):
     return sum(values[-length:]) / length
 
 
-# ============================================================
-# STATE (persists scanOn + per-coin trade memory between runs)
-# ============================================================
-
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r") as f:
@@ -199,10 +192,6 @@ def save_state(state):
         json.dump(state, f, indent=2)
 
 
-# ============================================================
-# TELEGRAM
-# ============================================================
-
 def send_telegram(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("[WARN] Telegram token/chat id not set, skipping send. Message was:\n" + text)
@@ -220,19 +209,14 @@ def send_telegram(text):
         print(f"[ERROR] Telegram send failed: {e}")
 
 
-# ============================================================
-# MAIN LOGIC
-# ============================================================
-
 def main():
     state = load_state()
 
-    # ---- BTC ----
     btc_closes, btc_highs, btc_lows, btc_vols = fetch_klines(BTC_SYMBOL)
     if len(btc_closes) < BTC_LOOKBACK + 2:
         print("Not enough BTC data yet.")
         return
-    time.sleep(1.2)  # avoid CryptoCompare's per-second rate limit on the free tier
+    time.sleep(1.2)
 
     btc_close = btc_closes[-1]
     btc_prev = btc_closes[-1 - BTC_LOOKBACK]
@@ -258,7 +242,7 @@ def main():
         coin_state = state["coins"][name]
 
         closes, highs, lows, vols = fetch_klines(symbol)
-        time.sleep(1.2)  # avoid CryptoCompare's per-second rate limit on the free tier
+        time.sleep(1.2)
         if len(closes) < max(BTC_LOOKBACK, VOLUME_LEN) + 3:
             continue
 
@@ -299,7 +283,6 @@ def main():
 
         candidate = gate and score >= REQUIRED_SCORE
 
-        # ---- trade management (mirrors Pine: exit check first, then entry) ----
         was_open = coin_state["open"]
         exited_this_bar = False
         h_last, l_last = highs[-1], lows[-1]
@@ -320,7 +303,6 @@ def main():
             coin_state["tp"] = c * (1 + TP_PERCENT / 100)
             coin_state["sl"] = c * (1 - SL_PERCENT / 100)
 
-        # ---- new-signal detection (mirrors newBuy = candidate and not candidate[1]) ----
         new_buy = candidate and not coin_state["prev_buy"]
         if new_buy:
             new_signals.append({
