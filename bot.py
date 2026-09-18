@@ -2,8 +2,14 @@
 BTC -> Altcoin Lag Scanner (Telegram Bot Edition)
 ==================================================
 Ports the exact logic of the "BTC → Altcoin Lag Scanner V3.0" Pine Script
-to Python, using Binance's free public REST API (no API key needed for
+to Python, using Bybit's free public REST API (no API key needed for
 market data) and sending Telegram messages on new BUY signals.
+
+NOTE: Binance's public API (api.binance.com) returns HTTP 451 for requests
+coming from US-based IPs, which includes GitHub Actions runners (hosted on
+US Azure datacenters). Bybit's public market-data endpoint does not apply
+this restriction, and uses the same symbol naming (e.g. BTCUSDT), so it's
+used here instead.
 
 Designed to be run every 15 minutes by a free scheduler (GitHub Actions).
 State (scanOn, open trades, win/loss, previous buy flags) is persisted to
@@ -21,7 +27,7 @@ import urllib.parse
 # ============================================================
 
 BTC_SYMBOL = "BTCUSDT"
-TIMEFRAME = "15m"          # Binance interval string
+TIMEFRAME = "15"           # Bybit interval in minutes (string)
 BTC_THRESHOLD = 0.30       # BTC Trigger %
 BTC_LOOKBACK = 1           # BTC Move Lookback (in closed candles)
 
@@ -69,25 +75,41 @@ NEEDED_CANDLES = max(CORR_LEN, VOLUME_LEN) + 10
 
 
 # ============================================================
-# BINANCE DATA (free public endpoint, no key required)
+# BYBIT DATA (free public endpoint, not geo-blocked, no key required)
 # ============================================================
 
 def fetch_klines(symbol, interval=TIMEFRAME, limit=NEEDED_CANDLES):
-    url = ("https://api.binance.com/api/v3/klines?" +
-           urllib.parse.urlencode({"symbol": symbol, "interval": interval, "limit": limit}))
+    url = ("https://api.bybit.com/v5/market/kline?" +
+           urllib.parse.urlencode({
+               "category": "spot",
+               "symbol": symbol,
+               "interval": interval,
+               "limit": limit,
+           }))
     with urllib.request.urlopen(url, timeout=15) as resp:
-        data = json.loads(resp.read().decode())
+        payload = json.loads(resp.read().decode())
+
+    if payload.get("retCode") != 0:
+        raise RuntimeError(f"Bybit API error for {symbol}: {payload.get('retMsg')}")
+
+    # Bybit returns rows as [startTime, open, high, low, close, volume, turnover],
+    # newest first. Sort ascending by time so downstream logic (which expects
+    # oldest -> newest, matching Pine's close[n] indexing) works the same way.
+    rows = payload["result"]["list"]
+    rows.sort(key=lambda r: int(r[0]))
+
+    interval_ms = int(interval) * 60_000
+    now_ms = int(time.time() * 1000)
 
     # Drop the currently-forming (unclosed) candle so we only ever act on
     # confirmed data, mirroring `confirmedOnly = true` in the Pine script.
-    now_ms = int(time.time() * 1000)
-    if data and data[-1][6] > now_ms:
-        data = data[:-1]
+    if rows and (int(rows[-1][0]) + interval_ms) > now_ms:
+        rows = rows[:-1]
 
-    closes = [float(k[4]) for k in data]
-    highs = [float(k[2]) for k in data]
-    lows = [float(k[3]) for k in data]
-    volumes = [float(k[5]) for k in data]
+    closes = [float(r[4]) for r in rows]
+    highs = [float(r[2]) for r in rows]
+    lows = [float(r[3]) for r in rows]
+    volumes = [float(r[5]) for r in rows]
     return closes, highs, lows, volumes
 
 
