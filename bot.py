@@ -87,12 +87,14 @@ NEEDED_CANDLES = max(CORR_LEN, VOLUME_LEN) + 10
 # CRYPTOCOMPARE DATA (free, no geo-blocking, key required)
 # ============================================================
 
-def fetch_klines(fsym, tsym=QUOTE, aggregate=AGGREGATE_MINUTES, limit=NEEDED_CANDLES, max_retries=3):
     params = {
         "fsym": fsym,
         "tsym": tsym,
         "aggregate": aggregate,
-        "limit": limit,
+        "limit": limit
+        "e": "Binance",
+    }
+
     }
     if CRYPTOCOMPARE_API_KEY:
         params["api_key"] = CRYPTOCOMPARE_API_KEY  # some CC endpoints expect it in the query string
