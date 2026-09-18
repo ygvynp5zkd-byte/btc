@@ -1,0 +1,95 @@
+{
+  "scan_on": false,
+  "coins": {
+    "ETH": {
+      "open": false,
+      "entry": null,
+      "tp": null,
+      "sl": null,
+      "win": 0,
+      "loss": 0,
+      "prev_buy": false
+    },
+    "BNB": {
+      "open": false,
+      "entry": null,
+      "tp": null,
+      "sl": null,
+      "win": 0,
+      "loss": 0,
+      "prev_buy": false
+    },
+    "SOL": {
+      "open": false,
+      "entry": null,
+      "tp": null,
+      "sl": null,
+      "win": 0,
+      "loss": 0,
+      "prev_buy": false
+    },
+    "XRP": {
+      "open": false,
+      "entry": null,
+      "tp": null,
+      "sl": null,
+      "win": 0,
+      "loss": 0,
+      "prev_buy": false
+    },
+    "ADA": {
+      "open": false,
+      "entry": null,
+      "tp": null,
+      "sl": null,
+      "win": 0,
+      "loss": 0,
+      "prev_buy": false
+    },
+    "DOGE": {
+      "open": false,
+      "entry": null,
+      "tp": null,
+      "sl": null,
+      "win": 0,
+      "loss": 0,
+      "prev_buy": false
+    },
+    "AVAX": {
+      "open": false,
+      "entry": null,
+      "tp": null,
+      "sl": null,
+      "win": 0,
+      "loss": 0,
+      "prev_buy": false
+    },
+    "LINK": {
+      "open": false,
+      "entry": null,
+      "tp": null,
+      "sl": null,
+      "win": 0,
+      "loss": 0,
+      "prev_buy": false
+    },
+    "DOT": {
+      "open": false,
+      "entry": null,
+      "tp": null,
+      "sl": null,
+      "win": 0,
+      "loss": 0,
+      "prev_buy": false
+    },
+    "LTC": {
+      "open": false,
+      "entry": null,
+      "tp": null,
+      "sl": null,
+      "win": 0,
+      "loss": 0,
+      "prev_buy": false
+    }
+  }
+}
