@@ -84,10 +84,10 @@ NEEDED_CANDLES = max(CORR_LEN, VOLUME_LEN) + 10
 
 
 # ============================================================
-# CRYPTOCOMPARE DATA (free, no geo-blocking; needs a free API key)
+# CRYPTOCOMPARE DATA (free, no geo-blocking, key required)
 # ============================================================
 
-def fetch_klines(fsym, tsym=QUOTE, aggregate=AGGREGATE_MINUTES, limit=NEEDED_CANDLES):
+def fetch_klines(fsym, tsym=QUOTE, aggregate=AGGREGATE_MINUTES, limit=NEEDED_CANDLES, max_retries=3):
     params = {
         "fsym": fsym,
         "tsym": tsym,
@@ -102,33 +102,44 @@ def fetch_klines(fsym, tsym=QUOTE, aggregate=AGGREGATE_MINUTES, limit=NEEDED_CAN
     if CRYPTOCOMPARE_API_KEY:
         headers["authorization"] = f"Apikey {CRYPTOCOMPARE_API_KEY}"  # ...and some expect it as a header
 
-    req = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            payload = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode(errors="replace")
-        raise RuntimeError(f"HTTP {e.code} from CryptoCompare for {fsym}: {body}") from None
+    last_error = None
+    for attempt in range(max_retries):
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                payload = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            last_error = RuntimeError(f"HTTP {e.code} from CryptoCompare for {fsym}: {body}")
+            time.sleep(3 * (attempt + 1))
+            continue
 
-    if payload.get("Response") != "Success":
-        raise RuntimeError(f"CryptoCompare API error for {fsym}: {payload.get('Message')}")
+        if payload.get("Response") != "Success":
+            msg = str(payload.get("Message", ""))
+            last_error = RuntimeError(f"CryptoCompare API error for {fsym}: {msg}")
+            if "rate limit" in msg.lower():
+                time.sleep(5 * (attempt + 1))
+                continue
+            raise last_error
 
-    rows = payload["Data"]["Data"]
-    rows.sort(key=lambda r: r["time"])
+        rows = payload["Data"]["Data"]
+        rows.sort(key=lambda r: r["time"])
 
-    interval_s = aggregate * 60
-    now_s = int(time.time())
+        interval_s = aggregate * 60
+        now_s = int(time.time())
 
-    # Drop the currently-forming (unclosed) candle so we only ever act on
-    # confirmed data, mirroring `confirmedOnly = true` in the Pine script.
-    if rows and (rows[-1]["time"] + interval_s) > now_s:
-        rows = rows[:-1]
+        # Drop the currently-forming (unclosed) candle so we only ever act on
+        # confirmed data, mirroring `confirmedOnly = true` in the Pine script.
+        if rows and (rows[-1]["time"] + interval_s) > now_s:
+            rows = rows[:-1]
 
-    closes = [float(r["close"]) for r in rows]
-    highs = [float(r["high"]) for r in rows]
-    lows = [float(r["low"]) for r in rows]
-    volumes = [float(r["volumeto"]) for r in rows]
-    return closes, highs, lows, volumes
+        closes = [float(r["close"]) for r in rows]
+        highs = [float(r["high"]) for r in rows]
+        lows = [float(r["low"]) for r in rows]
+        volumes = [float(r["volumeto"]) for r in rows]
+        return closes, highs, lows, volumes
+
+    raise last_error
 
 
 def pct_returns(closes):
@@ -219,6 +230,7 @@ def main():
     if len(btc_closes) < BTC_LOOKBACK + 2:
         print("Not enough BTC data yet.")
         return
+    time.sleep(1.2)  # avoid CryptoCompare's per-second rate limit on the free tier
 
     btc_close = btc_closes[-1]
     btc_prev = btc_closes[-1 - BTC_LOOKBACK]
@@ -244,6 +256,7 @@ def main():
         coin_state = state["coins"][name]
 
         closes, highs, lows, vols = fetch_klines(symbol)
+        time.sleep(1.2)  # avoid CryptoCompare's per-second rate limit on the free tier
         if len(closes) < max(BTC_LOOKBACK, VOLUME_LEN) + 3:
             continue
 
